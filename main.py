@@ -1,151 +1,202 @@
 from fastapi import FastAPI
 from telethon import TelegramClient
-import asyncio,re
+import asyncio
+import re
 
-api_id=34216039
-api_hash="aeafe65f91b250c95d3a443a4f7dbf06"
+# ==============================
+# Telegram Config
+# ==============================
 
-app=FastAPI()
-client=TelegramClient("mysession",api_id,api_hash)
+api_id = 34216039
+api_hash = "aeafe65f91b250c95d3a443a4f7dbf06"
 
-def normalize(text:str)->str:
-    if not text:return ""
-    text=text.replace("`","")
-    text=re.sub(r"[\u200c\u200f\u202a-\u202e\u0640]","",text)
-    text=re.sub(r"\s+"," ",text)
-    return text.strip()
+app = FastAPI()
+client = TelegramClient("mysession", api_id, api_hash)
 
-def to_int(v):
-    try:return int(str(v).replace(",","").strip())
-    except:return None
+# ==============================
+# Cache
+# ==============================
 
-def price(v):
-    x=to_int(v)
-    return x if x else 0
+cache_data = []
+CACHE_SECONDS = 120
 
-def extract(pattern,text):
-    m=re.search(pattern,text,re.I|re.S)
+# ==============================
+# Helpers
+# ==============================
+
+def to_int(value):
+    if value is None:
+        return None
+    try:
+        return int(str(value).replace(",", "").strip())
+    except:
+        return None
+
+
+def price_or_zero(value):
+    v = to_int(value)
+    return v if v else 0
+
+
+def extract_first(pattern, text, flags=re.S | re.I):
+    m = re.search(pattern, text, flags)
     return m.group(1) if m else None
 
-def clean_footer(text):
-    if not text:return ""
-    text=re.sub(r"^.*Just\s*In\s*Time.*$","",text,flags=re.I|re.M)
-    text=re.sub(r"^@\w+.*$","",text,flags=re.M)
-    text=re.sub(r"t\.me/\S+","",text)
-    return text.strip()
+# ==============================
+# Parsers
+# ==============================
+
+def parse_fardaedolar(text):
+    sell = extract_first(r"فروش.*?دلار[:\s]+([\d,]+)", text)
+    buy = extract_first(r"خرید.*?دلار[:\s]+([\d,]+)", text)
+    return {"sell_price": price_or_zero(sell), "buy_price": price_or_zero(buy)}
+
 
 def parse_hareta(text):
-    text=normalize(text)
-    sell=re.search(r"(?:🔴|فروشنده|فروش)\s*([\d,]+)|([\d,]+)\s*(?:فروشنده|فروش)",text)
-    buy=re.search(r"(?:🔵|خریدار|خرید)\s*([\d,]+)|([\d,]+)\s*(?:خریدار|خرید)",text)
-    s=(sell.group(1) or sell.group(2)) if sell else None
-    b=(buy.group(1) or buy.group(2)) if buy else None
-    return {"sell_price":price(s),"buy_price":price(b)}
+    sell = extract_first(r"([\d,]+)\s*فروش", text)
+    buy = extract_first(r"([\d,]+)\s*خ[\W_]*رید", text)
+    return {"sell_price": price_or_zero(sell), "buy_price": price_or_zero(buy)}
 
-def parse_farda(text):
-    text=normalize(text)
-    sell=extract(r"فروش.*?دلار[:\s]+([\d,]+)",text)
-    buy=extract(r"خرید.*?دلار[:\s]+([\d,]+)",text)
-    return {"sell_price":price(sell),"buy_price":price(buy)}
 
 def parse_abshdh(text):
-    text=clean_footer(normalize(text))
-    p=extract(r"آ?بشده[^\d\n]*([\d,]+)",text)
-    return {"sell_price":price(p),"buy_price":0}
+    price = extract_first(r"آ?بشده[^\d\n]*([\d,]+)", text)
+    return {"sell_price": price_or_zero(price), "buy_price": 0}
 
-def parse_qeymat(text):
-    text=normalize(text)
-    sell=extract(r"([\d,]+)[^\n]*فروش",text)
-    buy=extract(r"([\d,]+)[^\n]*خرید",text)
-    return {"sell_price":price(sell),"buy_price":price(buy)}
 
-def parse_gold(text):
-    text=normalize(text)
-    p=extract(r"(\d+(?:\.\d+)?)",text)
-    return {"sell_price":float(p) if p else 0,"buy_price":0}
+def parse_qeymatabshodeh(text):
+    sell = extract_first(r"([\d,]+)[^\n]*فروش", text)
+    buy = extract_first(r"([\d,]+)[^\n]*خرید", text)
+    return {"sell_price": price_or_zero(sell), "buy_price": price_or_zero(buy)}
+
+
+def parse_goldrate(text):
+    price = extract_first(r"(\d+(?:\.\d+)?)", text)
+    return {"sell_price": price_or_zero(price), "buy_price": 0}
+
 
 def parse_default(text):
-    return {"sell_price":0,"buy_price":0}
+    return {"sell_price": 0, "buy_price": 0}
 
-PARSERS={
-"fardaedolar":parse_farda,
-"Hareta_Dollar_Bloe":parse_hareta,
-"abshdh":parse_abshdh,
-"Qeymatabshodeh":parse_qeymat,
-"NaghdP":parse_qeymat,
-"goldratepric2020":parse_gold
+# ==============================
+# Parser Map
+# ==============================
+
+PARSERS = {
+    "fardaedolar": parse_fardaedolar,
+    "Hareta_Dollar_Bloe": parse_hareta,
+    "abshdh": parse_abshdh,
+    "Qeymatabshodeh": parse_qeymatabshodeh,
+    "NaghdP": parse_qeymatabshodeh,
+    "goldratepric2020": parse_goldrate,
 }
+
+# ==============================
+# Output Builder
+# ==============================
+
+def build_output(parsed, username):
+
+    sell_raw = parsed.get("sell_price", 0)
+    buy_raw = parsed.get("buy_price", 0)
+
+    sell = sell_raw * 10000
+    buy = buy_raw * 10000
+    gram = sell_raw if sell_raw else None
+
+    profit = (sell - buy) / 2 if sell and buy else 0
+    price = buy + profit if buy else sell
+
+    return {
+        "sell": sell,
+        "buy": buy,
+        "gram": gram,
+        "profit": profit,
+        "price": price,
+        "uuid": f"telegram-{username}",
+        "provider": "24telegram"
+    }
+
+# ==============================
+# Channels
+# ==============================
+
+CHANNELS = [
+    "mob83",
+    "fardaedolar",
+    "Hareta_Dollar_Bloe",
+    "abshdh",
+    "Qeymatabshodeh",
+    "NaghdP",
+    "goldratepric2020"
+]
+
+# ==============================
+# Background Updater
+# ==============================
+
+async def update_cache():
+
+    global cache_data
+
+    while True:
+
+        results = []
+
+        for username in CHANNELS:
+
+            try:
+                entity = await client.get_entity(username)
+                parser = PARSERS.get(username, parse_default)
+
+                async for msg in client.iter_messages(entity, limit=1):
+
+                    parsed = parser(msg.text or "")
+                    data = build_output(parsed, username)
+
+                    data["date"] = str(msg.date)
+
+                    results.append(data)
+
+            except Exception as e:
+
+                results.append({
+                    "uuid": f"telegram-{username}",
+                    "error": str(e),
+                    "provider": "24telegram"
+                })
+
+        cache_data = results
+
+        await asyncio.sleep(CACHE_SECONDS)
+
+# ==============================
+# Startup
+# ==============================
 
 @app.on_event("startup")
 async def startup():
+
     await client.start()
+
+    asyncio.create_task(update_cache())
+
+# ==============================
+# Shutdown
+# ==============================
 
 @app.on_event("shutdown")
 async def shutdown():
     await client.disconnect()
 
+# ==============================
+# Route
+# ==============================
+
 @app.get("/")
-async def read_root(limit:int=10):
+async def get_prices():
 
-    usernames=[
-        "fardaedolar",
-        "Hareta_Dollar_Bloe",
-        "abshdh",
-        "Qeymatabshodeh",
-        "NaghdP",
-        "goldratepric2020"
-    ]
-
-    async def get_channel(username:str):
-        try:
-            entity=await client.get_entity(username)
-            parser=PARSERS.get(username,parse_default)
-            posts=[]
-            last_sell=0
-            last_buy=0
-
-            async for msg in client.iter_messages(entity,limit=limit):
-                text=msg.text or ""
-                parsed=parser(text)
-
-                if parsed["sell_price"]:last_sell=parsed["sell_price"]
-                if parsed["buy_price"]:last_buy=parsed["buy_price"]
-
-                posts.append({
-                    "message_id":msg.id,
-                    "date":str(msg.date),
-                    "parsed":parsed
-                })
-
-            posts.reverse()
-
-            return{
-                "username":username,
-                "latest_prices":{"sell_price":last_sell,"buy_price":last_buy},
-                "count":len(posts),
-                "posts":posts
-            }
-
-        except Exception as e:
-            return{"username":username,"error":str(e)}
-
-    results=await asyncio.gather(*(get_channel(u) for u in usernames))
-
-    return{
-        "total_channels":len(results),
-        "channels":results
+    return {
+        "count": len(cache_data),
+        "data": cache_data,
+        "refresh_seconds": CACHE_SECONDS
     }
-
-@app.get("/username/{username}")
-async def read_root(username: str):
-    entity = await client.get_entity(username)
-
-    messages = []
-    async for msg in client.iter_messages(entity, limit=20):
-        messages.append({
-            "id": msg.id,
-            "text": msg.text,
-            "date": str(msg.date)
-        })
-
-    return {"messages": messages}
