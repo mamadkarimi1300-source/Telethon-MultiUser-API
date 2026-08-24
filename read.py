@@ -1,9 +1,13 @@
+import os
+
 from telethon import TelegramClient
 
-api_id = 39297563
-api_hash = "19fa457d712a4e679708dfed2c6dde1c"
+from session_manager import create_session
 
-client = TelegramClient("mysession", api_id, api_hash)
+api_id = int(os.environ["TELEGRAM_API_ID"])
+api_hash = os.environ["TELEGRAM_API_HASH"]
+
+client = TelegramClient(str(create_session(os.environ.get("TELEGRAM_USER_ID", "default"))), api_id, api_hash)
 
 async def main():
     entity = await client.get_entity("@mob83")

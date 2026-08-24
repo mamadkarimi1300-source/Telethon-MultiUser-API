@@ -1,0 +1,14 @@
+*.session
+*.session-journal
+sessions/
+.env
+__pycache__/
+*.py[cod]
+.pytest_cache/
+venv/
+.venv/
+fastapi-env/
+frontend/node_modules/
+*.sqlite3
+*.save
+*.tmp

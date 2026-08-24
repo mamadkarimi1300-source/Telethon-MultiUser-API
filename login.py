@@ -1,10 +1,14 @@
+import os
+
 from telethon import TelegramClient
 
-api_id = 34216039
-api_hash = "aeafe65f91b250c95d3a443a4f7dbf06"
-phone = "+447988029161"
+from session_manager import create_session
 
-client = TelegramClient("mysession", api_id, api_hash)
+api_id = int(os.environ["TELEGRAM_API_ID"])
+api_hash = os.environ["TELEGRAM_API_HASH"]
+phone = os.environ["TELEGRAM_PHONE"]
+
+client = TelegramClient(str(create_session(os.environ.get("TELEGRAM_USER_ID", "default"))), api_id, api_hash)
 
 client.start(phone)
 print("Logged in successfully")
